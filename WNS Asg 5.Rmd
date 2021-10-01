@@ -1,0 +1,194 @@
+---
+title: "WNS Asg 5"
+author: "Sonal Singh"
+date: "20/04/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown
+```{r message=FALSE, warning=FALSE}
+#importing libraries
+library(igraph)
+library("scales")
+library(ggraph)
+library(knitr)
+library(tidyr)
+library(kableExtra)
+#read the graph
+g<- read_graph(file="WordPairs.txt",format="pajek")
+#make it undirected
+g<- as.undirected(g)
+#removing the edges pointing to the same node they emerge from
+g<-simplify(g)
+
+#reading cue.txt
+cueval <- scan("cue.txt", character(), quote = '')
+#removing unwanted values
+cueval <- cueval[-1:-24]
+#making it numeric
+cueval <- as.numeric(cueval)
+#setting cue attribute to vertex
+g <- set_vertex_attr(g, "cueindicator", value = cueval )
+length(V(g))
+#deleting non cuewords from graph
+g<- delete.vertices(g,which(V(g)$cueindicator == 0)) # remove nodes with degree zero
+length(V(g))
+#deleteing_vertices with zero degree
+g<- delete.vertices(g,which(degree(g)==0)) 
+length(V(g))
+#scaling weights from 0 to 1
+E(g)$weight<-rescale(E(g)$weight) 
+
+#Copying g into three different graphs
+gart<-g
+gknowledge<-g
+gmind<-g
+
+edgedeletion <- function(gvar, wthreshold)
+{
+  #deleting edges in gvar that are smaller than the threshold
+  return(delete.edges(gvar, which(E(gvar)$weight < wthreshold)))
+}
+#deleting edges
+gart<- edgedeletion(gart,0.028)
+gknowledge<- edgedeletion(gknowledge,0.026)
+gmind<- edgedeletion(gmind, 0.032)
+
+#KNOWLEDGE, MIND, ART
+t1<- V(gart)$name %in% c("ART")
+t1 <- V(gart)[t1] #Stores node ART
+t2<- V(gknowledge)$name %in% c("KNOWLEDGE")
+t2 <- V(gknowledge)[t2] #Stores node KNOWLEDGE
+t3<- V(gmind)$name %in% c("MIND")
+t3 <- V(gmind)[t3] #Stores node MIND
+
+#vectors to store random walk result
+walk_rand_art<-c()
+walk_rand_knowledge<-c()
+walk_rand_mind<-c()
+#for loop to run random walk 1000 times 
+for(i in 1:1000)
+{
+  walk_rand_art <- c(walk_rand_art, random_walk(gart, start= t1, steps=3, stuck = "return"))
+  walk_rand_knowledge <- c(walk_rand_knowledge, random_walk(gknowledge, start= t2, steps=3, stuck = "return"))
+  walk_rand_mind <- c(walk_rand_mind, random_walk(gmind, start= t3, steps=3, stuck = "return"))
+}
+
+vertexdeletion <- function(gvar, walk_rand_var)
+{
+  vec<- as.numeric(rownames(table(walk_rand_var)))
+  # remove nodes not in random walk
+  gresult<- delete.vertices(gvar,V(gvar)[which(!(V(gvar)$name %in% V(gvar)[vec]$name))]) 
+  return(gresult)
+}
+# calling vertexdeletion to delete vertices not in random walk
+gart<-vertexdeletion(gart,walk_rand_art)
+gknowledge<-vertexdeletion(gknowledge,walk_rand_knowledge)
+gmind<-vertexdeletion(gmind,walk_rand_mind)
+
+gart<- delete.vertices(gart,which(degree(gart)==1)) # remove nodes with degree one
+gknowledge<- delete.vertices(gknowledge,which(degree(gknowledge)==1)) # remove nodes with degree one
+gmind<- delete.vertices(gmind,which(degree(gmind)==1)) # remove nodes with degree one
+# function to plot graphs
+plotgraph <- function(gvar)
+{
+  gnew<- ggraph(gvar, layout = "fr") +
+  geom_edge_link2(aes(edge_alpha = weight),
+                  edge_width=0.3, show.legend = FALSE) +
+  geom_node_point(aes(size=degree(gvar)),
+                  color = "deepskyblue", 
+                  alpha=0.4, show.legend = FALSE) +
+  geom_node_text(aes(label = name), size = 1.75,
+                 repel = FALSE) +
+  scale_size_area(max_size=10) +
+  theme_void()
+  return(gnew)
+}
+# plotting graphs
+artplot <- plotgraph(gart)
+plot(artplot)
+knowledgeplot <- plotgraph(gknowledge)
+plot(knowledgeplot)
+mindplot <- plotgraph(gmind)
+plot(mindplot)
+#AUTHORITY_MEASURES
+### PAGE RANK FOR ART#####
+alpha = 0.85
+pr<- page_rank(gart, algo = "arpack",  directed = TRUE, damping = alpha ,personalized = NULL, options = NULL)
+as1<-sort(pr$vector, TRUE)[1:3]
+knitr::kable(as1,row.names=TRUE,col.names=c("Authority Score"), "html")
+###AUTHORITY SCORE FOR KNOWLEDGE#####
+authority<- authority_score(gknowledge, scale = TRUE)$vector
+as2<-sort(authority, TRUE)[1:3]
+knitr::kable(as2,row.names=TRUE,col.names=c("Authority Score"), "html")
+#####DEGREE CENTRALITY FOR MIND #####
+degreecent<-degree(gmind)
+as3<-sort(degreecent, TRUE)[1:3]
+knitr::kable(as3,row.names=TRUE,col.names=c("Authority Score"), "html")
+###Louvain algorithm####
+clusterdf <- function(gvar)
+{
+  set.seed(4292)
+  communitiesvar<-cluster_louvain(gvar) #Louvain algorithm for community detection
+  tmpr<-as.list(membership(communitiesvar)) #Members stored in tmpr as a list
+  wordlist<- names(tmpr) #Names(Words) stored in wordlist
+  clusternumber <- matrix(0, length(names(tmpr)))
+  df <- data.frame(wordlist,clusternumber) #Dataframe having wordlist and clusternumbers (all zeros at this point)
+  for( l in names(tmpr))
+  {
+  rownum<- which(df$wordlist==l) #Getting rownumber which has word l
+  df[rownum,2]<-tmpr[[l]] #Storing clusternumber in that rownumber and column 2
+  }
+  
+  clusternames<-unique(unlist(as.list(df["clusternumber"]), use.names = FALSE)) #Storing all unique clusternumbers
+  newdf <- matrix(ncol = 2, nrow=0)
+  newdf <- data.frame(newdf)
+  for(s in clusternames) #For each clusternumber
+  {
+  rowindex<-which(df["clusternumber"]==s) #get the position in dataframe df
+  newlist<-c()
+  for(r in rowindex) #at all those position we also have word in column word
+  {
+  newlist<-c(newlist,df[r,1]) #append each word to newlist
+  }
+  comcount<-length(newlist) #get the count
+  newlist<- paste( unlist(newlist), collapse=' ')
+  newdf<-rbind(newdf,c(s,newlist,comcount)) #store both words list (newlist) and cluster numbers in newdf
+  }
+  colnames(newdf)<-c("Cluster Number","Members","Count") #giving column headings
+  newdf<-newdf[order(newdf["Cluster Number"]),] #sorting
+  return(newdf)
+}
+
+artdf<-clusterdf(gart)
+knowledgedf<-clusterdf(gknowledge)
+minddf<-clusterdf(gmind)
+
+#plotting the tables using kable
+knitr::kable(artdf,row.names=FALSE, "html")%>% add_header_above(header= c("ART"=3))
+knitr::kable(knowledgedf,row.names=FALSE, "html")%>% add_header_above(header= c("KNOWLEDGE"=3))
+knitr::kable(minddf,row.names=FALSE, "html")%>% add_header_above(header= c("MIND"=3))
+
+#Interpretation
+artint<-c(" Art as a kind of Talent"," Art for Renovation"," Art for Restoration"," Result of Art like House/Artist/Painter etc"," Art Canvas"," Art as in Divine Creation"," Book Art like Sketching/Scribbling"," Digital Art")
+aclnum<-seq(1:8)
+artint<-data.frame(aclnum,artint)
+colnames(artint)<-c("Cluster No.","Interpretation")
+knitr::kable(artint,row.names=FALSE,align = "ll", "html")%>% add_header_above(header= c("ART CLUSTERS INTERPRETATION"=2))
+knowledgeint<-c("Getting Knowledge with Experience and Information","Where knowledge is probably stored","Classification of a person based on the knowedge they have","Resources to obtain knowledge","Academic and Educational Knowledge","Traits of a person having knowldege")
+kclnum<-seq(1:6)
+knowledgeint<-data.frame(kclnum,knowledgeint)
+colnames(knowledgeint)<-c("Cluster No.","Interpretation")
+knitr::kable(knowledgeint,row.names=FALSE,align = "ll", "html")%>% add_header_above(header= c("KNOWLEDGE CLUSTERS INTERPRETATION"=2))
+mindint<-c("Something mind does","Comprehending ability of Mind","Part of body where mind if thought to be there","Mind in the context of Science and experiments","Classifying thought process of a person as in creative, intellectual, etc","Mind as in a body part","Ability of mind to recollect or process past information","Something that puts mind to work")
+mclnum<-seq(1:8)
+mindint<-data.frame(mclnum,mindint)
+colnames(mindint)<-c("Cluster No.","Interpretation")
+knitr::kable(knowledgeint,row.names=FALSE,align = "ll", "html")%>% add_header_above(header= c("MIND CLUSTERS INTERPRETATION"=2))
+
+```
+
